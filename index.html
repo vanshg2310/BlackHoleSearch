@@ -230,10 +230,6 @@ if (localStorage.getItem('theme') === 'light') document.documentElement.classLis
         <input type="range" id="sim2fFault" min="0" max="5" value="1">
       </label>
       <label>
-        BYZANTINE DECEPTION — <span class="val-display" id="sim2ByzDeceptionVal">50%</span>
-        <input type="range" id="sim2ByzDeception" min="0" max="100" step="5" value="50">
-      </label>
-      <label>
         COMMUNICATION MODEL
         <select id="sim2CommModel">
           <option value="whiteboard">Whiteboard</option>
@@ -249,6 +245,15 @@ if (localStorage.getItem('theme') === 'light') document.documentElement.classLis
       </label>
       <div class="formula-box" id="sim2FormulaBox">
         — configure above —
+      </div>
+      <div class="sep"></div>
+      <div class="section-title" style="margin-top:0;">// ADVERSARY CONFIG</div>
+      <label>
+        BH DECEPTION PROBABILITY — <span class="val-display" id="sim2BhDeceptionVal">0%</span>
+        <input type="range" id="sim2BhDeception" min="0" max="100" step="5" value="0">
+      </label>
+      <div class="formula-box" style="font-size:11px; padding: 8px 10px; text-align:left; background-color: #1a150020; border-left-color: #ffb700;">
+        A Byzantine Black Hole may lie by not destroying an agent, making a DANGEROUS edge appear SAFE. This slider sets the probability of such a lie during a probe.
       </div>
       <div class="sep"></div>
       <label>
@@ -269,8 +274,6 @@ if (localStorage.getItem('theme') === 'light') document.documentElement.classLis
     </div>
     <div class="legend">
       <div class="legend-item"><div class="dot dot-good"></div>GOOD AGENT</div>
-      <div class="legend-item"><div class="dot dot-byz"></div>BYZANTINE</div>
-      <div class="legend-item"><div class="dot dot-identified"></div>IDENTIFIED BYZ</div>
       <div class="legend-item"><div class="dot dot-bh"></div>BLACK HOLE</div>
       <div class="legend-item"><div class="dot dot-safe"></div>SAFE NODE</div>
       <div class="legend-item"><div class="dot dot-home"></div>HOMEBASE</div>
@@ -312,10 +315,6 @@ if (localStorage.getItem('theme') === 'light') document.documentElement.classLis
       <div class="stat-cell">
         <div class="stat-label">WAITERS</div>
         <div class="stat-val sv-yellow" id="sim2Waiters">0</div>
-      </div>
-      <div class="stat-cell">
-        <div class="stat-label">BYZ FOUND</div>
-        <div class="stat-val sv-purple" id="sim2ByzFound">0</div>
       </div>
       <div class="stat-cell">
         <div class="stat-label">BOUNDARY</div>

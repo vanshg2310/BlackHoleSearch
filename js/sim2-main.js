@@ -49,7 +49,7 @@ function showTooltip2(evt) {
     ? '☠ BLACK HOLE'
     : node.hasClass('safe') ? '✓ SAFE' : 'Unexplored';
   const agentList = agentsHere.length > 0
-    ? agentsHere.map(a => `A${a.id}${a.byzantine ? ' [BYZ]' : ''}`).join(', ')
+    ? agentsHere.map(a => `A${a.id}`).join(', ')
     : 'none';
   tooltip.innerHTML = `<b>${nid}</b><br>Agents: ${agentList}<br>${here}`;
   tooltip.style.left = `${pos.x + 18}px`;
@@ -71,9 +71,8 @@ const state = {
   traversalIndex: 0,
   currentOperation: null,
   activeAgentId: null,
-  identifiedByzantine: new Set(),
   lostInBH: 0,
-  deceptionProb: 0.5,
+  bhDeceptionProb: 0.0,
   log: [],
   intervalId: null,
 };
@@ -113,9 +112,9 @@ function makeAgents(k, f, homebase) {
       id: i,
       pos: homebase,
       alive: true,
-      byzantine: i < f,
+      byzantine: false,
       identified: false,
-      status: i < f ? 'byz' : 'good',
+      status: 'good',
     });
   }
   return agents;
@@ -164,7 +163,6 @@ function renderSim2() {
   q('sim2Waiters').textContent = String(waiters);
 
   q('sim2Boundary').textContent = String(state.safeNodes.size);
-  q('sim2ByzFound').textContent = String(state.identifiedByzantine.size);
 
   const edgeSafe = Object.values(state.edgeStatus).filter(v => v === 'safe').length;
   const edgeDanger = Object.values(state.edgeStatus).filter(v => v === 'dangerous').length;
@@ -194,7 +192,6 @@ function renderSim2() {
     setStat('sRound', String(state.round));
     setStat('sAlive', String(aliveCount));
     setStat('sLost', String(state.lostInBH));
-    setStat('sByzFound', String(state.identifiedByzantine.size));
     setStat('sEdgeSafe', String(edgeSafe));
     setStat('sEdgeDanger', String(edgeDanger));
 
@@ -246,8 +243,6 @@ function stepSim2() {
     moveAgentCluster(action.agentIds, action.from ?? op.step.from, action.to ?? op.step.to);
   } else if (action.type === 'lose') {
     loseAgentToBlackHole(action.agentId, action.from ?? op.step.from, action.to ?? op.step.to);
-  } else if (action.type === 'refuseReturn') {
-    refuseReturn(action.agentId, action.from ?? op.step.from, action.to ?? op.step.to);
   } else if (action.type === 'markMoveOnly') {
     s.currentNode = op.step.to;
     markCurrentNode(op.step.to);
@@ -305,7 +300,7 @@ function resetSim2() {
   if (q('overlay2')) q('overlay2').className = '';
 
   ['sim2Round', 'sim2Alive', 'sim2Lost', 'sim2Explorers', 'sim2Waiters',
-   'sim2Boundary', 'sim2ByzFound', 'sim2EdgeSafe', 'sim2EdgeDanger'].forEach(id => {
+   'sim2Boundary', 'sim2EdgeSafe', 'sim2EdgeDanger'].forEach(id => {
       const el = q(id);
       if (el) {
         el.textContent = (id === 'sim2Alive') ? '—' : '0';
@@ -329,7 +324,7 @@ function buildSim2() {
 
   // Build nodes/edges via shared generator and initialize cy2 with the same style/layout as sim1
   const topo = q('sim2TopoSelect').value;
-  const { nodes, edges } = generateGraph(topo, state.nodeCount);
+  const { nodes, edges } = generateGraph(topo, +q('sim2nNodes').value);
   initCy2(nodes, edges);
   if (cy2) {
     const homeId = `n0`;
@@ -352,7 +347,7 @@ function buildSim2() {
   const f = +q('sim2fFault').value;
   const comm = q('sim2CommModel').value;
   const know = q('sim2TopoKnow').value;
-  const deceptionProb = (+q('sim2ByzDeception').value || 50) / 100;
+  const bhDeceptionProb = (+q('sim2BhDeception').value || 0) / 100;
 
   const homebase = 0;
   const neighbors = buildNeighbors(n, edges);
@@ -382,7 +377,7 @@ function buildSim2() {
 
   Object.assign(state, {
     n, f, k, homebase, bhNode, agents, neighbors, ports, edges,
-    edgeStatus, edgeEvidence, know, comm, delta,
+    edgeStatus, edgeEvidence, know, comm, delta, bhDeceptionProb,
     round: 0,
     done: false,
     found: false,
@@ -394,9 +389,7 @@ function buildSim2() {
     traversalIndex: 0,
     currentOperation: null,
     activeAgentId: null,
-    identifiedByzantine: new Set(),
     lostInBH: 0,
-    deceptionProb,
     log: [],
   });
 
@@ -416,9 +409,9 @@ function buildSim2() {
   addLog('Simulation initialized.', 'system');
   addLog(`Graph built: ${n} nodes, ${edges.length} edges, Delta=${delta}`, 'system');
   addLog(`Black Hole at node ${bhNode} (hidden from agents)`, 'system');
-  addLog(`Team: k=${k} agents, f=${f} Byzantine`, 'system');
-  addLog(`Byzantine deception rate: ${(deceptionProb * 100).toFixed(0)}% per probe`, 'system');
-  addLog(`CCP thresholds: ${f + 1} distinct return(s) => SAFE, ${f + 1} distinct non-return(s) => DANGEROUS.`, 'info');
+  addLog(`Team: k=${k} agents, fault tolerance f=${f}`, 'system');
+  addLog(`Byzantine BH deception rate: ${(bhDeceptionProb * 100).toFixed(0)}% per probe`, 'system');
+  addLog(`CCP thresholds: 1 distinct return => SAFE, 1 distinct non-return => DANGEROUS.`, 'info');
   addLog(`Homebase: node ${homebase}. DFS traversal plan ready.`, 'info');
 
   updateFormula2();
@@ -486,8 +479,13 @@ function switchSimulation(value) {
   const sim2 = q('sim2-container');
   if (!sim1 || !sim2) return;
   if (value === 'sim2') {
-    sim1.style.display = 'none'; // Potential issue: main.js uses '' to show
+    sim1.style.display = 'none';
     sim2.style.display = 'flex';
+    // When the container becomes visible, we must tell Cytoscape to resize.
+    if (cy2) {
+      cy2.resize();
+      cy2.fit();
+    }
   } else {
     sim1.style.display = '';
     sim2.style.display = 'none';
@@ -520,7 +518,8 @@ function updateSim2AgentChips() {
     return;
   }
   agentList.innerHTML = state.agents.map(agent => {
-    const status = agent.alive ? (agent.identified ? 'identified' : agent.status) : 'dead';
+    // All agents are good, so status is either 'good' or 'dead'.
+    const status = agent.alive ? 'good' : 'dead';
     return `<div class="agent-chip agent-${status}" title="A${agent.id} - pos: ${agent.pos ?? 'lost'}">A${agent.id}</div>`;
   }).join('');
 }
@@ -699,7 +698,7 @@ function prepareProbeOperation(step) {
     return { step, actions: [{ type: 'noop' }], index: 0 };
   }
 
-  const threshold = state.f + 1;
+  const threshold = 1; // No byzantine agents, 1 confirmation is enough.
   const candidates = agentsAvailableForProbe(from);
   if (candidates.length < threshold) {
     addLog(`CCP cannot start on (${from}->${to}): need ${threshold} available agents at node ${from}, found ${candidates.length}.`, 'danger');
@@ -712,7 +711,7 @@ function prepareProbeOperation(step) {
     sent: new Set(),
     returned: new Set(),
     missing: new Set(),
-    limit: Math.min(2 * state.f + 1, candidates.length),
+    limit: 1,
   };
 
   const op = { step, actions: [], index: 0, probe };
@@ -721,7 +720,7 @@ function prepareProbeOperation(step) {
     return { step, actions: [{ type: 'noop' }], index: 0, failed: true };
   }
 
-  addLog(`CCP starts on (${from}->${to}) with a solo probe loop; the edge will only be classified once ${threshold} distinct outcomes are observed.`, 'system');
+  addLog(`CCP starts on (${from}->${to}) with a solo probe; 1 confirmation needed.`, 'system');
   return op;
 }
 
@@ -729,48 +728,31 @@ function agentsAvailableForProbe(nodeId) {
   return state.agents.filter(agent =>
     agent.alive &&
     agent.pos === nodeId &&
-    !agent.identified &&
-    !state.identifiedByzantine.has(agent.id)
+    !agent.identified // this property is now always false but harmless to keep check
   );
 }
 
 function buildProbeActionsForAgent(agent, from, to, probe) {
   probe.sent.add(agent.id);
   const isBlackHolePort = to === state.bhNode;
-  const deceptive = shouldByzantineDeceive(agent);
 
   if (isBlackHolePort) {
-    if (agent.byzantine) {
-      if (deceptive) {
-        return [
-          { type: 'move', agentId: agent.id, from, to },
-          { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
-        ];
-      }
+    const bhDeceives = Math.random() < state.bhDeceptionProb;
+    if (bhDeceives) {
+      addLog(`Byzantine BH at ${to} deceives, A${agent.id} returns.`, 'byz');
+      return [
+        { type: 'move', agentId: agent.id, from, to },
+        { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
+      ];
+    } else {
       return [{ type: 'lose', agentId: agent.id, from, to, probeResult: 'missing' }];
     }
-    return [{ type: 'lose', agentId: agent.id, from, to, probeResult: 'missing' }];
-  }
-
-  if (agent.byzantine) {
-    if (deceptive) {
-      return [{ type: 'refuseReturn', agentId: agent.id, from, to, probeResult: 'missing' }];
-    }
-    return [
-      { type: 'move', agentId: agent.id, from, to },
-      { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
-    ];
   }
 
   return [
     { type: 'move', agentId: agent.id, from, to },
     { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
   ];
-}
-
-function shouldByzantineDeceive(agent) {
-  if (!agent || !agent.byzantine) return false;
-  return Math.random() < (state.deceptionProb ?? 0.5);
 }
 
 function recordProbeEvidence(op) {
@@ -829,15 +811,6 @@ function scheduleSoloProbe(op) {
   return 'continue';
 }
 
-function identifyByzantine(agentId, reason) {
-  if (state.identifiedByzantine.has(agentId)) return;
-
-  const agent = state.agents.find(a => a.id === agentId);
-  state.identifiedByzantine.add(agentId);
-  if (agent) agent.identified = true;
-  addLog(`A${agentId} identified as Byzantine: ${reason}`, 'byz');
-}
-
 function markPortDangerous(from, to, message) {
   const key = edgeKey(from, to);
   state.edgeStatus[key] = 'dangerous';
@@ -850,10 +823,11 @@ function markPortDangerous(from, to, message) {
 function moveAgent(agentId, from, to) {
   const agent = state.agents.find(a => a.id === agentId);
   if (!agent || !agent.alive) return;
+
   agent.pos = to;
   state.currentNode = to;
   markCurrentNode(to);
-  addLog(`A${agent.id} moves ${from}->${to} (${agent.byzantine ? 'Byzantine' : 'good'}).`, agent.byzantine ? 'byz' : 'info');
+  addLog(`A${agent.id} moves ${from}->${to} (good).`, 'info');
 }
 
 function moveAgentCluster(agentIds, from, to) {
@@ -867,15 +841,6 @@ function moveAgentCluster(agentIds, from, to) {
   markCurrentNode(to);
   const labels = agents.map(agent => `A${agent.id}`).join(', ');
   addLog(`Cluster release: ${labels} move ${from}->${to} together.`, 'safe');
-}
-
-function refuseReturn(agentId, from, to) {
-  const agent = state.agents.find(a => a.id === agentId);
-  if (!agent || !agent.alive) return;
-  agent.pos = to;
-  state.currentNode = from;
-  markCurrentNode(from);
-  addLog(`A${agent.id} leaves ${from}->${to} and does not return to the group.`, 'warn');
 }
 
 function loseAgentToBlackHole(agentId, from, to) {
@@ -920,7 +885,7 @@ function completeOperation(op) {
 
   const returned = op.probe.returned.size;
   const missing = op.probe.missing.size;
-  const threshold = state.f + 1;
+  const threshold = 1; // No byzantine agents, 1 confirmation is enough.
 
   addLog(`CCP evidence on (${from}->${to}): ${returned}/${threshold} returned, ${missing}/${threshold} did not return.`, 'system');
 
@@ -936,10 +901,6 @@ function completeOperation(op) {
       addLog(`${label}: port (${from}->${to}) certified SAFE after ${returned} distinct return(s).`, 'safe');
     }
 
-    op.probe.missing.forEach(agentId => {
-      identifyByzantine(agentId, `it failed to return from (${from}->${to}), which was later certified SAFE.`);
-    });
-
     return scheduleSafeAdvance(op);
   }
 
@@ -948,10 +909,6 @@ function completeOperation(op) {
     state.bhLocated = true;
     state.currentNode = from;
     markPortDangerous(from, to, `CCP on port (${from}->${to}) certified DANGEROUS after ${missing} distinct non-return(s).`);
-
-    op.probe.returned.forEach(agentId => {
-      identifyByzantine(agentId, `it returned from (${from}->${to}) after that port was certified DANGEROUS.`);
-    });
 
     return 'complete';
   }
@@ -1004,7 +961,7 @@ function installEventHandlers() {
 
   q('sim2nNodes').addEventListener('input', () => { q('sim2nVal').textContent = q('sim2nNodes').value; updateFormula2(); });
   q('sim2fFault').addEventListener('input', () => { q('sim2fVal').textContent = q('sim2fFault').value; updateFormula2(); });
-  q('sim2ByzDeception').addEventListener('input', () => { q('sim2ByzDeceptionVal').textContent = `${q('sim2ByzDeception').value}%`; });
+  q('sim2BhDeception').addEventListener('input', () => { q('sim2BhDeceptionVal').textContent = `${q('sim2BhDeception').value}%`; });
   q('sim2TopoKnow').addEventListener('change', updateFormula2);
   q('sim2CommModel').addEventListener('change', updateFormula2);
 
