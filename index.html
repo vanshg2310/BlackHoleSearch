@@ -203,77 +203,186 @@ if (localStorage.getItem('theme') === 'light') document.documentElement.classLis
 </div>
 </div>
 
-<div id="sim2-container">
-  <div class="sim2-main">
-    <div class="sim2-controls">
-      <div class="section-title">// BYZANTINE BBH SIMULATION</div>
-      <div class="controls">
-        <label>
-          PATH SIZE
-          <input id="sim2PathSize" type="range" min="6" max="10" value="7">
-          <span class="val-display" id="sim2PathSizeVal">7</span>
-        </label>
-        <label>
-          GRAPH TOPOLOGY
-          <select id="sim2TopoSelect">
-            <option value="random">Random Connected Graph</option>
-            <option value="ring">Ring</option>
-            <option value="complete">Complete Graph</option>
-            <option value="grid">Grid</option>
-            <option value="tree">Balanced Tree</option>
-            <option value="star">Star</option>
-          </select>
-        </label>
-        <label>
-          ADVERSARY MODE
-          <select id="sim2AdversaryMode">
-            <option value="random">Random activate</option>
-            <option value="always">Always destroy</option>
-            <option value="never">Never destroy</option>
-          </select>
-        </label>
-        <label>
-          SIMULATION SPEED
-          <select id="sim2SpeedSel">
-            <option value="1000">Slow</option>
-            <option value="600" selected>Normal</option>
-            <option value="250">Fast</option>
-          </select>
-        </label>
-        <div class="btn-row">
-          <button class="btn btn-primary" id="sim2BuildBtn">BUILD</button>
-          <button class="btn btn-warn" id="sim2ResetBtn">RESET</button>
-        </div>
-        <button class="btn btn-primary" id="sim2RunBtn">▶ RUN SIMULATION</button>
-        <button class="btn btn-danger" id="sim2StepBtn">STEP →</button>
+<div id="sim2-container" style="display: none;">
+  <div class="main">
+
+  <!-- LEFT PANEL (SIM 2) -->
+  <div class="left-panel" id="sim2Controls">
+    <div class="section-title">// BYZANTINE BBH SIMULATION</div>
+    <div class="controls">
+      <label>
+        GRAPH TOPOLOGY
+        <select id="sim2TopoSelect">
+          <option value="random">Random Connected Graph</option>
+          <option value="ring">Ring</option>
+          <option value="complete">Complete Graph</option>
+          <option value="grid">Grid</option>
+          <option value="tree">Balanced Tree</option>
+          <option value="star">Star</option>
+        </select>
+      </label>
+      <label>
+        NODES — <span class="val-display" id="sim2nVal">8</span>
+        <input type="range" id="sim2nNodes" min="4" max="16" value="8">
+      </label>
+      <label>
+        BYZANTINE AGENTS (f) — <span class="val-display" id="sim2fVal">1</span>
+        <input type="range" id="sim2fFault" min="0" max="5" value="1">
+      </label>
+      <label>
+        BYZANTINE DECEPTION — <span class="val-display" id="sim2ByzDeceptionVal">50%</span>
+        <input type="range" id="sim2ByzDeception" min="0" max="100" step="5" value="50">
+      </label>
+      <label>
+        COMMUNICATION MODEL
+        <select id="sim2CommModel">
+          <option value="whiteboard">Whiteboard</option>
+          <option value="local">Local (Face-to-Face)</option>
+        </select>
+      </label>
+      <label>
+        TOPOLOGY KNOWLEDGE
+        <select id="sim2TopoKnow">
+          <option value="known">Known Map (DFS)</option>
+          <option value="unknown" selected>Unknown Map (Explore)</option>
+        </select>
+      </label>
+      <div class="formula-box" id="sim2FormulaBox">
+        — configure above —
+      </div>
+      <div class="sep"></div>
+      <label>
+        SIMULATION SPEED
+        <select id="sim2SpeedSel">
+          <option value="800">Slow</option>
+          <option value="400" selected>Normal</option>
+          <option value="150">Fast</option>
+          <option value="40">Turbo</option>
+        </select>
+      </label>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="sim2BuildBtn">BUILD GRAPH</button>
+        <button class="btn btn-warn" id="sim2ResetBtn">RESET</button>
+      </div>
+      <button class="btn btn-primary" id="sim2RunBtn" disabled>▶ RUN SIMULATION</button>
+      <button class="btn btn-danger" id="sim2StepBtn" disabled>STEP →</button>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="dot dot-good"></div>GOOD AGENT</div>
+      <div class="legend-item"><div class="dot dot-byz"></div>BYZANTINE</div>
+      <div class="legend-item"><div class="dot dot-identified"></div>IDENTIFIED BYZ</div>
+      <div class="legend-item"><div class="dot dot-bh"></div>BLACK HOLE</div>
+      <div class="legend-item"><div class="dot dot-safe"></div>SAFE NODE</div>
+      <div class="legend-item"><div class="dot dot-home"></div>HOMEBASE</div>
+      <div class="legend-item"><div class="dot dot-unexplored"></div>UNEXPLORED</div>
+    </div>
+  </div>
+
+  <!-- GRAPH (SIM 2) -->
+  <div class="graph-area">
+    <div id="cy2"></div>
+    <div id="agentLayer2" aria-hidden="true"></div>
+    <div id="overlay2">
+      <div class="ov-title" id="ov2Title">—</div>
+      <div class="ov-sub" id="ov2Sub">—</div>
+      <button class="btn btn-primary" id="overlay2CloseBtn" style="pointer-events:auto;width:180px;margin-top:8px">CLOSE</button>
+    </div>
+    <div id="tooltip2" class="sim2-tooltip"></div>
+  </div>
+
+  <!-- RIGHT PANEL (SIM 2) -->
+  <div class="right-panel" id="sim2Status">
+    <div class="stats-grid">
+      <div class="stat-cell">
+        <div class="stat-label">ROUND</div>
+        <div class="stat-val sv-cyan" id="sim2Round">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">AGENTS ALIVE</div>
+        <div class="stat-val sv-green" id="sim2Alive">—</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">DEAD</div>
+        <div class="stat-val sv-red" id="sim2Lost">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">EXPLORERS</div>
+        <div class="stat-val sv-purple" id="sim2Explorers">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">WAITERS</div>
+        <div class="stat-val sv-yellow" id="sim2Waiters">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">BYZ FOUND</div>
+        <div class="stat-val sv-purple" id="sim2ByzFound">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">BOUNDARY</div>
+        <div class="stat-val sv-green" id="sim2Boundary">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">EDGES SAFE</div>
+        <div class="stat-val sv-green" id="sim2EdgeSafe">0</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-label">EDGES DANGER</div>
+        <div class="stat-val sv-red" id="sim2EdgeDanger">0</div>
       </div>
     </div>
 
-    <div class="sim2-viewport">
-      <div class="sim2-status-panel">
-        <div class="sim2-stats-grid">
-          <div><div class="stat-label">ROUND</div><div class="stat-val sv-cyan" id="sim2Round">0</div></div>
-          <div><div class="stat-label">ALIVE</div><div class="stat-val sv-green" id="sim2Alive">6</div></div>
-          <div><div class="stat-label">EXPLORERS</div><div class="stat-val sv-purple" id="sim2Explorers">4</div></div>
-          <div><div class="stat-label">WAITERS</div><div class="stat-val sv-yellow" id="sim2Waiters">2</div></div>
-          <div><div class="stat-label">DEAD</div><div class="stat-val sv-red" id="sim2Dead">0</div></div>
-          <div><div class="stat-label">BOUNDARY</div><div class="stat-val sv-green" id="sim2Boundary">unknown</div></div>
-          <div><div class="stat-label">BYZ FOUND</div><div class="stat-val sv-purple" id="sim2ByzFound">0</div></div>
-          <div><div class="stat-label">EDGES DANGER</div><div class="stat-val sv-red" id="sim2EdgeDanger">0</div></div>
-        </div>
-        <div class="sim2-phase">Phase: <span id="sim2Phase">Explorer formation</span></div>
-      </div>
-      <div class="sim2-graph-area">
-        <div id="cy2"></div>
-        <div id="agentLayer2" aria-hidden="true"></div>
-        <div id="tooltip2" class="sim2-tooltip"></div>
-      </div>
-      <div class="sim2-log-panel">
-        <div class="section-title">// EVENT LOG</div>
-        <div id="sim2Log" class="sim2-log"></div>
+    <div class="progress-bar-wrap sim2-progress-wrap">
+      <div class="progress-bar-fill" id="sim2ProgressBar"></div>
+    </div>
+
+    <div class="tab-bar">
+      <div class="tab active" data-tab="log">EVENT LOG</div>
+      <div class="tab" data-tab="edges">EDGE STATUS</div>
+      <div class="tab" data-tab="agents">AGENTS</div>
+    </div>
+
+    <div class="tab-content active" id="sim2-tab-log">
+      <div id="sim2Log" class="log-sim2"></div>
+    </div>
+
+    <div class="tab-content" id="sim2-tab-edges">
+      <div class="edge-table" id="sim2EdgeTable"></div>
+    </div>
+
+    <div class="tab-content" id="sim2-tab-agents">
+      <div class="agent-section" style="max-height:none;flex:1;">
+        <div class="agent-list" id="sim2AgentList"></div>
       </div>
     </div>
+
   </div>
+</div>
+</div>
+
+<!-- Legacy structure below is now replaced by the above block -->
+<div id="sim2-container-old" style="display: none;">
+  <div class="sim2-main-old">
+    <div class="sim2-controls-old">
+      <!-- ... -->
+    </div>
+    <div class="sim2-viewport-old">
+      <div class="sim2-status-panel-old">
+        <div class="sim2-stats-grid">
+          <div><div class="stat-label">ROUND</div><div class="stat-val sv-cyan" id="sim2Round">0</div></div>
+          <div><div class="stat-label">AGENTS ALIVE</div><div class="stat-val sv-green" id="sim2Alive">—</div></div>
+          <div><div class="stat-label">LOST IN BH</div><div class="stat-val sv-red" id="sim2Lost">0</div></div>
+          <div><div class="stat-label">BYZ FOUND</div><div class="stat-val sv-purple" id="sim2ByzFound">0</div></div>
+          <div><div class="stat-label">EDGES SAFE</div><div class="stat-val sv-green" id="sim2EdgeSafe">0</div></div>
+          <div><div class="stat-label">EDGES DANGER</div><div class="stat-val sv-red" id="sim2EdgeDanger">0</div></div>
+        </div>
+        <div class="progress-bar-wrap sim2-progress-wrap">
+          <div class="progress-bar-fill" id="sim2ProgressBar"></div>
+        </div>
+      </div>      
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script type="module" src="js/main.js"></script>
@@ -292,6 +401,6 @@ themeToggle.onclick = () => {
 };
 syncThemeToggle();
 </script>
-<footer class="footer-credit">Developed by Vansh Gupta v5.5</footer>
+<footer class="footer-credit">Developed by Vansh Gupta v5.6</footer>
 </body>
 </html>

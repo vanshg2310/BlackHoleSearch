@@ -1,6 +1,6 @@
 import { generateGraph } from './graph-generation.js';
 import { STYLE } from './cytoscape-setup.js';
-import { renderAgentsLayer, getCyEdge, highlightEdge, markCurrentNode } from './sim-shared.js';
+import { renderAgentsLayer, getCyEdge as getCyEdgeShared, highlightEdge as highlightEdgeShared, markCurrentNode as markCurrentNodeShared } from './sim-shared.js';
 import { cyRef, setSimState } from './state.js';
 import { setStat, logAdd, logClear, updateAgentChips, updateEdgeTable } from './ui.js';
 
@@ -8,7 +8,10 @@ const q = id => document.getElementById(id);
 let cy2 = null;
 
 // Use shared STYLE from sim1 for visual parity
-
+const highlightEdge = (from, to, mode) => highlightEdgeShared(cy2, from, to, mode);
+const markCurrentNode = (nodeId) => markCurrentNodeShared(cy2, nodeId);
+const getCyEdge = (from, to) => getCyEdgeShared(cy2, from, to);
+ 
 function initCy2(nodes, edges) {
   if (!q('cy2')) return;
   if (cy2) cy2.destroy();
@@ -31,89 +34,91 @@ function initCy2(nodes, edges) {
   try { cyRef.instance = cy2; } catch (e) { /* ignore */ }
   cy2.on('mouseover', 'node', showTooltip2);
   cy2.on('mouseout', 'node', () => { q('tooltip2').style.display = 'none'; });
-  // keep agent layer in sync on pan/zoom/resize and when nodes move
-  cy2.on('pan zoom resize layoutstop', () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, null));
-  cy2.on('position', 'node', () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, null));
+  cy2.on('pan zoom resize layoutstop', () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId));
+  cy2.on('position', 'node', () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId));
 }
 
 function showTooltip2(evt) {
+  if (!state) return;
   const node = evt.target;
-  const index = Number(node.id().slice(1));
+  const nid = node.id();
   const tooltip = q('tooltip2');
   const pos = node.renderedPosition();
-  const agentsHere = state.agents.filter(agent => agent.alive && agent.pos === index);
-  const status = index === 0 ? 'Home node' : index === state.bhIndex ? 'Byzantine Black Hole' : (state.safeBoundary !== null && index <= state.safeBoundary ? 'Safe node' : 'Path node');
-  const agentList = agentsHere.length ? agentsHere.map(agent => agent.id).join(', ') : 'none';
-  tooltip.innerHTML = `<b>n${index}</b><br>${status}<br>Agents: ${agentList}`;
+  const agentsHere = state.agents.filter(a => a.alive && `n${a.pos}` === nid);
+  const here = node.hasClass('blackhole') || node.hasClass('revealed')
+    ? '☠ BLACK HOLE'
+    : node.hasClass('safe') ? '✓ SAFE' : 'Unexplored';
+  const agentList = agentsHere.length > 0
+    ? agentsHere.map(a => `A${a.id}${a.byzantine ? ' [BYZ]' : ''}`).join(', ')
+    : 'none';
+  tooltip.innerHTML = `<b>${nid}</b><br>Agents: ${agentList}<br>${here}`;
   tooltip.style.left = `${pos.x + 18}px`;
   tooltip.style.top = `${pos.y - 34}px`;
   tooltip.style.display = 'block';
 }
 
-const explorerPatterns = [
-  [1, 0, 0, 0],
-  [2, 1, 0, 0],
-  [3, 2, 1, 0],
-  [4, 3, 2, 1],
-  [5, 4, 3, 2],
-  [4, 3, 2, 1],
-  [3, 2, 1, 0],
-  [2, 1, 0, 0],
-  [1, 0, 0, 0],
-  [0, 0, 0, 0],
-];
-
-const phaseLabels = {
-  formation: 'Explorer formation',
-  'waiter-search': 'Waiters probing BBH boundary',
-  'home-explore': 'Perpetual home component exploration',
-  completed: 'Simulation completed',
-};
-
 const state = {
+  n: 8, f: 1, k: 0, homebase: 0, bhNode: -1, agents: [], neighbors: {}, ports: {}, edges: [],
+  edgeStatus: {}, edgeEvidence: {}, know: 'unknown', comm: 'whiteboard', delta: 0,
   round: 0,
-  nodeCount: 7,
-  bhIndex: 4,
-  agents: [],
-  phase: 'formation',
-  safeBoundary: null,
-  probeStep: null,
-  homeCycle: 0,
-  bhRevealed: false,
+  done: false,
+  found: false,
+  bhLocated: false,
+  currentNode: 0,
+  visitedNodes: new Set(),
+  safeNodes: new Set(),
+  traversalOrder: [],
+  traversalIndex: 0,
+  currentOperation: null,
+  activeAgentId: null,
+  identifiedByzantine: new Set(),
+  lostInBH: 0,
+  deceptionProb: 0.5,
   log: [],
   intervalId: null,
-  bhLocated: false,
-  homeExploreStarted: false,
 };
 
-function makeAgents() {
-  return [
-    { id: 'F1', role: 'waiter', pos: 0, alive: true },
-    { id: 'F2', role: 'waiter', pos: 0, alive: true },
-    { id: 'L', role: 'leader', pos: 0, alive: true },
-    { id: 'I1', role: 'intermediate', pos: 0, alive: true },
-    { id: 'I2', role: 'intermediate', pos: 0, alive: true },
-    { id: 'F', role: 'follower', pos: 0, alive: true },
-  ];
-}
+function updateFormula2() {
+  const f = +q('sim2fFault').value;
+  const know = q('sim2TopoKnow').value;
+  const comm = q('sim2CommModel').value;
 
-function buildPathElements() {
-  const nodes = [];
-  const edges = [];
-  const spacing = 120;
-  const centerOffset = (state.nodeCount - 1) * spacing / 2;
-
-  for (let index = 0; index < state.nodeCount; index += 1) {
-    nodes.push({
-      data: { id: `n${index}`, label: `${index}` },
-      position: { x: index * spacing - centerOffset, y: 0 },
-    });
-    if (index < state.nodeCount - 1) {
-      edges.push({ data: { id: `e${index}-${index + 1}`, source: `n${index}`, target: `n${index + 1}` } });
-    }
+  let k, time, alg;
+  if (know === 'known') {
+    k = 2 * f + 2;
+    time = 'O(n + f)';
+    alg = 'DFS+CCP';
+  } else if (comm === 'whiteboard') {
+    k = '(f+1)(∆+1)';
+    time = 'O(m + f)';
+    alg = 'DFS+CCP+WB';
+  } else {
+    k = '(f+1)(∆+1)+3f+1';
+    time = 'O(m·n + f)';
+    alg = 'DFS+CCP+MAP';
   }
 
-  initCy2(nodes, edges);
+  q('sim2FormulaBox').innerHTML = `
+    <span class="hi">k ≥ ${typeof k === 'number' ? `<b>${k}</b>` : k}</span> agents needed<br>
+    Time: <span class="hi-g">${time}</span><br>
+    Algorithm: <span class="hi">${alg}</span><br>
+    <span class="hi-r">f = ${f}</span> Byzantine fault(s)
+  `;
+}
+
+function makeAgents(k, f, homebase) {
+  const agents = [];
+  for (let i = 0; i < k; i++) {
+    agents.push({
+      id: i,
+      pos: homebase,
+      alive: true,
+      byzantine: i < f,
+      identified: false,
+      status: i < f ? 'byz' : 'good',
+    });
+  }
+  return agents;
 }
 
 function addLog(text, style = 'info') {
@@ -133,84 +138,65 @@ function addLog(text, style = 'info') {
   }
 }
 
-function getAgent(agentId) {
-  return state.agents.find(agent => agent.id === agentId);
-}
-
-function aliveAgents() {
-  return state.agents.filter(agent => agent.alive);
-}
-
-function explorerAgents() {
-  return state.agents.filter(agent => agent.role !== 'waiter');
-}
-
-function explorersReturnedHome() {
-  return explorerAgents().every(agent => !agent.alive || agent.pos === 0);
-}
-
-function getAliveCounts() {
-  return {
-    total: aliveAgents().length,
-    explorers: explorerAgents().filter(agent => agent.alive).length,
-    waiters: state.agents.filter(agent => agent.role === 'waiter' && agent.alive).length,
-    dead: state.agents.filter(agent => !agent.alive).length,
-  };
-}
-
 function renderSim2() {
   if (cy2) {
     cy2.nodes().forEach(node => {
       const index = Number(node.id().slice(1));
       node.removeClass('homebase blackhole safe current');
       if (index === 0) node.addClass('homebase');
-      if (index === state.bhIndex) node.addClass('blackhole');
-      if (state.safeBoundary !== null && index <= state.safeBoundary) node.addClass('safe');
-
-      const agentsHere = state.agents.filter(agent => agent.alive && agent.pos === index);
-      // label update handled by shared renderer when it runs; keep minimal label here
-      node.data('label', `${index}`);
+      if (index === state.bhNode) node.addClass('blackhole');
+      if (state.safeNodes.has(index)) node.addClass('safe');
     });
     cy2.resize();
     cy2.fit();
-    renderAgentsLayer(cy2, q('agentLayer2'), state.agents, null);
+    renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId);
   }
 
   q('sim2Round').textContent = String(state.round);
-  const counts = getAliveCounts();
-  q('sim2Alive').textContent = String(counts.total);
-  q('sim2Explorers').textContent = String(counts.explorers);
-  q('sim2Waiters').textContent = String(counts.waiters);
-  q('sim2Dead').textContent = String(counts.dead);
-  q('sim2Phase').textContent = phaseLabels[state.phase] || '—';
-  q('sim2Boundary').textContent = state.safeBoundary === null ? 'unknown' : state.safeBoundary;
-  q('sim2ByzFound').textContent = state.bhLocated ? '1' : '0';
-  q('sim2EdgeDanger').textContent = state.bhLocated ? '1' : '0';
+  const aliveAgents = state.agents.filter(a => a.alive);
+  const aliveCount = aliveAgents.length;
+  q('sim2Alive').textContent = String(aliveCount);
+  q('sim2Lost').textContent = String(state.lostInBH);
+
+  const explorers = aliveAgents.filter(a => a.pos !== state.homebase).length;
+  const waiters = aliveAgents.filter(a => a.pos === state.homebase).length;
+  q('sim2Explorers').textContent = String(explorers);
+  q('sim2Waiters').textContent = String(waiters);
+
+  q('sim2Boundary').textContent = String(state.safeNodes.size);
+  q('sim2ByzFound').textContent = String(state.identifiedByzantine.size);
+
+  const edgeSafe = Object.values(state.edgeStatus).filter(v => v === 'safe').length;
+  const edgeDanger = Object.values(state.edgeStatus).filter(v => v === 'dangerous').length;
+  q('sim2EdgeSafe').textContent = String(edgeSafe);
+  q('sim2EdgeDanger').textContent = String(edgeDanger);
+  q('sim2ProgressBar').style.width = progressPercent() + '%';
 
   const logRoot = q('sim2Log');
-  if (!state.log.length) {
-    logRoot.innerHTML = '<div class="sim2-log-entry sim2-muted">Simulation initialized. Press step or run.</div>';
-  } else {
-    logRoot.innerHTML = state.log
-      .map(entry => {
-        const label = entry.round ? `Round ${entry.round}` : 'Start';
-        const colorClass = entry.style === 'danger' ? 'sim2-log-danger' : entry.style === 'warn' ? 'sim2-log-warn' : entry.style === 'safe' ? 'sim2-log-safe' : 'sim2-log-info';
-        return `<div class="sim2-log-entry ${colorClass}"><div class="sim2-log-label">${label}</div><div>${entry.text}</div></div>`;
-      })
-      .join('');
+  if (logRoot) {
+    if (!state.log.length) {
+      logRoot.innerHTML = '<div class="log-entry"><span class="log-msg system">Simulation initialized. Press BUILD.</span></div>';
+    } else {
+      logRoot.innerHTML = state.log
+        .map(entry => `<div class="log-entry"><span class="log-round">R${entry.round}</span><span class="log-msg ${entry.style}">${entry.text}</span></div>`)
+        .join('');
+      logRoot.scrollTop = logRoot.scrollHeight;
+    }
   }
+
+  updateSim2AgentChips();
+  updateSim2EdgeTable();
 
   updateRunButton();
 
   // Sync main UI panel and log to mirror sim2 state for parity with sim1
   try {
     setStat('sRound', String(state.round));
-    const counts = getAliveCounts();
-    setStat('sAlive', String(counts.total));
-    setStat('sLost', String(counts.dead));
-    setStat('sByzFound', '0');
-    setStat('sEdgeSafe', state.safeBoundary === null ? '0' : String(state.safeBoundary));
-    setStat('sEdgeDanger', '0');
+    setStat('sAlive', String(aliveCount));
+    setStat('sLost', String(state.lostInBH));
+    setStat('sByzFound', String(state.identifiedByzantine.size));
+    setStat('sEdgeSafe', String(edgeSafe));
+    setStat('sEdgeDanger', String(edgeDanger));
 
     // Update main log to match sim2 log
     logClear();
@@ -224,165 +210,77 @@ function renderSim2() {
   }
 }
 
-// Use shared helpers from sim-shared.js: getCyEdge, highlightEdge, markCurrentNode, renderAgentsLayer
-
 function updateRunButton() {
   q('sim2RunBtn').textContent = state.intervalId ? '⏸ PAUSE' : '▶ RUN SIMULATION';
 }
 
-function chooseAdversaryActivation() {
-  const mode = q('sim2AdversaryMode').value;
-  if (mode === 'always') return true;
-  if (mode === 'never') return false;
-  return Math.random() < 0.5;
-}
-
-function checkBlackHoleActivation() {
-  const visitors = state.agents.filter(agent => agent.alive && agent.role !== 'waiter' && agent.pos === state.bhIndex);
-  if (!visitors.length) return;
-
-  const destroyed = chooseAdversaryActivation();
-  if (destroyed) {
-    visitors.forEach(agent => {
-      agent.alive = false;
-      agent.pos = null;
-    });
-    state.bhLocated = true;
-    state.bhRevealed = true;
-    addLog(`BBH activates and destroys ${visitors.map(agent => agent.id).join(', ')} at node ${state.bhIndex}.`, 'danger');
-    const survivors = explorerAgents().filter(agent => agent.alive).map(agent => agent.id);
-    if (survivors.length) {
-      addLog(`Survivor(s) ${survivors.join(', ')} infer the BBH location from the missing formation.`, 'byz');
-    }
-  } else {
-    state.bhRevealed = true;
-    addLog(`BBH withheld destruction at node ${state.bhIndex}; explorers mark the node suspicious.`, 'warn');
-  }
-}
-
-function applyFormationStep() {
-  const pattern = explorerPatterns[Math.min(state.round - 1, explorerPatterns.length - 1)];
-  const explorerOrder = ['L', 'I1', 'I2', 'F'];
-  explorerOrder.forEach((id, index) => {
-    const agent = getAgent(id);
-    if (!agent || !agent.alive) return;
-    const prev = agent.pos;
-    agent.pos = pattern[index];
-    if (prev !== agent.pos) highlightEdge(cy2, prev, agent.pos, 'release');
-  });
-  const movement = pattern.map((pos, idx) => `${['L', 'I1', 'I2', 'F'][idx]}→${pos}`).join(', ');
-  addLog(`Explorers advance: ${movement}.`, 'info');
-  checkBlackHoleActivation();
-}
-
-function stepWaiterSearch() {
-  if (!state.probeStep) {
-    state.probeStep = { nextMover: 'F1', nextIndex: 1 };
-    addLog('Waiters begin cautious probing of the home component boundary.', 'warn');
+function stepSim2() {
+  if (state.done) {
+    addLog('Simulation has completed. Build a new graph to run again.', 'warn');
+    return;
   }
 
-  const mover = getAgent(state.probeStep.nextMover);
-  if (!mover || !mover.alive) {
-    const alternative = state.agents.find(agent => agent.role === 'waiter' && agent.alive);
-    if (!alternative) {
-      state.phase = 'completed';
-      addLog('Both waiters have been lost before boundary detection completed.', 'danger');
+  const s = state;
+  if (!s.currentOperation) {
+    if (shouldFinish()) {
+      finishSim2(finishWasSuccessful());
       return;
     }
-    state.probeStep.nextMover = alternative.id;
+    s.currentOperation = prepareOperation(s.traversalOrder[s.traversalIndex]);
+  }
+
+  const op = s.currentOperation;
+  const action = op.actions[op.index++];
+  if (!action) {
+    addLog('Simulation halted: no valid action was available for the current DFS step.', 'danger');
+    finishSim2(false);
     return;
   }
-
-  const targetIndex = state.probeStep.nextIndex;
-  if (targetIndex >= state.nodeCount) {
-    state.safeBoundary = state.nodeCount - 1;
-    state.phase = 'home-explore';
-    addLog('Waiters confirmed the path beyond the home boundary as safe.', 'safe');
-    return;
-  }
-
-  if (targetIndex === state.bhIndex) {
-    mover.alive = false;
-    mover.pos = null;
-    state.bhRevealed = true;
-    state.safeBoundary = targetIndex - 1;
-    state.phase = 'home-explore';
-    addLog(`${mover.id} died at node ${targetIndex}; home safe boundary is node ${state.safeBoundary}.`, 'danger');
-    return;
-  }
-
-  const prev = mover.pos;
-  mover.pos = targetIndex;
-  if (prev !== mover.pos) highlightEdge(cy2, prev, mover.pos, 'probing');
-  addLog(`${mover.id} cautiously advances to node ${targetIndex} while partner watches.`, 'info');
-  state.probeStep.nextIndex += 1;
-  state.probeStep.nextMover = mover.id === 'F1' ? 'F2' : 'F1';
-}
-
-function stepHomeExploration() {
-  if (!state.homeExploreStarted) {
-    state.homeExploreStarted = true;
-    addLog(`Waiters are now perpetually exploring safe home component [0..${state.safeBoundary}].`, 'safe');
-  }
-
-  const aliveWaiters = state.agents.filter(agent => agent.role === 'waiter' && agent.alive);
-  if (!aliveWaiters.length) {
-    state.phase = 'completed';
-    addLog('No waiters remain to continue safe exploration.', 'danger');
-    return;
-  }
-
-  if (state.safeBoundary === null) {
-    state.safeBoundary = 0;
-  }
-
-  const stepIndex = state.homeCycle % (state.safeBoundary + 1);
-  if (aliveWaiters.length === 2) {
-    const prev0 = aliveWaiters[0].pos;
-    const prev1 = aliveWaiters[1].pos;
-    aliveWaiters[0].pos = stepIndex;
-    aliveWaiters[1].pos = state.safeBoundary - stepIndex;
-    if (prev0 !== aliveWaiters[0].pos) highlightEdge(cy2, prev0, aliveWaiters[0].pos, 'release');
-    if (prev1 !== aliveWaiters[1].pos) highlightEdge(cy2, prev1, aliveWaiters[1].pos, 'release');
-  } else {
-    const prev0 = aliveWaiters[0].pos;
-    aliveWaiters[0].pos = stepIndex;
-    if (prev0 !== aliveWaiters[0].pos) highlightEdge(cy2, prev0, aliveWaiters[0].pos, 'release');
-  }
-
-  state.homeCycle += 1;
-  if (state.homeCycle > (state.safeBoundary + 1) * 2) {
-    state.homeCycle = 0;
-  }
-}
-
-function stepSim2() {
-  if (state.phase === 'completed') {
-    addLog('Simulation has completed. Reset to run again.', 'warn');
-    return;
-  }
-
   state.round += 1;
+  s.activeAgentId = action.agentId ?? null;
+  highlightEdge(action.from ?? op.step.from, action.to ?? op.step.to, action.type === 'moveCluster' ? 'release' : 'probing');
 
-  if (state.phase === 'formation') {
-    applyFormationStep();
-    if (state.round === explorerPatterns.length) {
-      if (!explorersReturnedHome()) {
-        state.phase = 'waiter-search';
-        addLog('Explorers failed to return in the expected time; waiters begin cautious boundary detection.', 'danger');
-      } else {
-        state.phase = 'home-explore';
-        state.safeBoundary = state.safeBoundary === null ? state.nodeCount - 1 : state.safeBoundary;
-        addLog('Explorers returned safely. Waiters continue perpetual exploration of the safe home component.', 'safe');
-      }
-    }
-  } else if (state.phase === 'waiter-search') {
-    stepWaiterSearch();
-  } else if (state.phase === 'home-explore') {
-    stepHomeExploration();
+  if (action.type === 'move') {
+    moveAgent(action.agentId, action.from ?? op.step.from, action.to ?? op.step.to);
+  } else if (action.type === 'moveCluster') {
+    moveAgentCluster(action.agentIds, action.from ?? op.step.from, action.to ?? op.step.to);
+  } else if (action.type === 'lose') {
+    loseAgentToBlackHole(action.agentId, action.from ?? op.step.from, action.to ?? op.step.to);
+  } else if (action.type === 'refuseReturn') {
+    refuseReturn(action.agentId, action.from ?? op.step.from, action.to ?? op.step.to);
+  } else if (action.type === 'markMoveOnly') {
+    s.currentNode = op.step.to;
+    markCurrentNode(op.step.to);
+  } else if (action.type === 'noop') {
+    addLog('No DFS movement was required this round.', 'info');
   }
 
-  if (state.phase === 'completed' && state.intervalId) {
+  if (op.index >= op.actions.length) {
+    const outcome = completeOperation(op);
+    if (outcome === 'failed') {
+      renderSim2();
+      finishSim2(false);
+      return;
+    }
+    if (outcome === 'complete') {
+      s.currentOperation = null;
+      s.traversalIndex++;
+    }
+  }
+
+  renderSim2();
+
+  if (s.agents.filter(a => a.alive && !a.byzantine).length === 0) {
+    addLog('ALL GOOD AGENTS ELIMINATED - BHS FAILED', 'danger');
+    finishSim2(false);
+    return;
+  }
+
+  if (!s.currentOperation && shouldFinish()) {
+    finishSim2(finishWasSuccessful());
+  }
+
+  if (state.done && state.intervalId) {
     clearInterval(state.intervalId);
     state.intervalId = null;
   }
@@ -391,75 +289,172 @@ function stepSim2() {
 }
 
 function resetSim2() {
-  if (state.intervalId) {
-    clearInterval(state.intervalId);
-    state.intervalId = null;
+  clearInterval(state.intervalId);
+  state.intervalId = null;
+
+  if (cy2) {
+    cy2.destroy();
+    cy2 = null;
   }
-  state.round = 0;
-  state.agents = makeAgents();
-  state.phase = 'formation';
-  state.safeBoundary = null;
-  state.probeStep = null;
-  state.homeCycle = 0;
-  state.bhRevealed = false;
-  state.bhLocated = false;
-  state.homeExploreStarted = false;
-  state.log = [];
-  buildSim2();
+
+  // Clear UI elements
+  if (q('agentLayer2')) q('agentLayer2').innerHTML = '';
+  if (q('sim2Log')) q('sim2Log').innerHTML = '';
+  if (q('sim2EdgeTable')) q('sim2EdgeTable').innerHTML = '';
+  if (q('sim2AgentList')) q('sim2AgentList').innerHTML = '';
+  if (q('overlay2')) q('overlay2').className = '';
+
+  ['sim2Round', 'sim2Alive', 'sim2Lost', 'sim2Explorers', 'sim2Waiters',
+   'sim2Boundary', 'sim2ByzFound', 'sim2EdgeSafe', 'sim2EdgeDanger'].forEach(id => {
+      const el = q(id);
+      if (el) {
+        el.textContent = (id === 'sim2Alive') ? '—' : '0';
+      }
+  });
+  if (q('sim2ProgressBar')) q('sim2ProgressBar').style.width = '0%';
+  if (q('sim2RunBtn')) {
+    q('sim2RunBtn').disabled  = true;
+    q('sim2RunBtn').textContent = '▶ RUN SIMULATION';
+  }
+  if (q('sim2StepBtn')) q('sim2StepBtn').disabled = true;
+
+  addLog('Simulation reset. Press BUILD to generate a new graph.', 'system');
+  renderSim2();
 }
 
 function buildSim2() {
-  if (state.intervalId) {
-    clearInterval(state.intervalId);
-    state.intervalId = null;
-  }
-
-  state.nodeCount = Math.max(6, Math.min(10, Number(q('sim2PathSize').value)));
-  const maxIndex = state.nodeCount - 2;
-  const minIndex = Math.max(3, Math.floor(state.nodeCount / 2));
-  state.bhIndex = Math.min(maxIndex, Math.max(minIndex, Math.floor(Math.random() * (state.nodeCount - 4)) + 3));
-  state.agents = makeAgents();
-  state.round = 0;
-  state.phase = 'formation';
-  state.safeBoundary = null;
-  state.probeStep = null;
-  state.homeCycle = 0;
-  state.bhRevealed = false;
-  state.bhLocated = false;
-  state.homeExploreStarted = false;
-  state.log = [];
+  clearInterval(state.intervalId);
+  state.intervalId = null;
+  q('sim2RunBtn').textContent = '▶ RUN SIMULATION';
 
   // Build nodes/edges via shared generator and initialize cy2 with the same style/layout as sim1
-  const topo = q('sim2TopoSelect') ? q('sim2TopoSelect').value : 'random';
+  const topo = q('sim2TopoSelect').value;
   const { nodes, edges } = generateGraph(topo, state.nodeCount);
   initCy2(nodes, edges);
   if (cy2) {
     const homeId = `n0`;
-    const bhId = `n${state.bhIndex}`;
+    const bhId = `n${state.bhNode}`;
     const nHome = cy2.getElementById(homeId);
     const nBh = cy2.getElementById(bhId);
     if (nHome && nHome.length) nHome.addClass('homebase');
     if (nBh && nBh.length) nBh.addClass('blackhole');
-    // publish sim2 state to shared simState for UI functions
-    try { setSimState(state); } catch (e) { /* ignore */ }
-    // update main UI components to reflect sim2
-    try {
-      logClear();
-      // main log expects entries in chronological order; sim2.state.log stores latest first
-      (state.log || []).slice().reverse().forEach(entry => logAdd(entry.round || 0, entry.style || 'info', entry.text));
-      updateAgentChips();
-      updateEdgeTable();
-      setStat('sRound', String(state.round));
-      setStat('sAlive', String(getAliveCounts().total));
-      setStat('sLost', String(getAliveCounts().dead));
-      setStat('sByzFound', '0');
-      setStat('sEdgeSafe', state.safeBoundary === null ? '0' : String(state.safeBoundary));
-      setStat('sEdgeDanger', '0');
-    } catch (e) { /* ignore UI sync errors */ }
   }
 
-  addLog('Byzantine BBH home exploration simulation initialized.', 'info');
+  // Clear UI before building
+  if (q('sim2EdgeTable')) q('sim2EdgeTable').innerHTML = '';
+  if (q('sim2AgentList')) q('sim2AgentList').innerHTML = '';
+  if (q('overlay2')) q('overlay2').className = '';
+  if (q('sim2Log')) {
+    q('sim2Log').innerHTML = '';
+  }
+
+  const n = +q('sim2nNodes').value;
+  const f = +q('sim2fFault').value;
+  const comm = q('sim2CommModel').value;
+  const know = q('sim2TopoKnow').value;
+  const deceptionProb = (+q('sim2ByzDeception').value || 50) / 100;
+
+  const homebase = 0;
+  const neighbors = buildNeighbors(n, edges);
+  const bhNode = chooseBlackHole(n, homebase, neighbors, know);
+
+  const delta = Math.max(...Object.values(neighbors).map(v => v.length));
+  const k = Math.max(requiredAgents(know, comm, f, delta), f + 2);
+
+  const agents = makeAgents(k, f, homebase);
+
+  const ports = {};
+  for (let i = 0; i < n; i++) ports[i] = [...new Set(neighbors[i])].sort((a, b) => a - b);
+
+  const edgeStatus = {};
+  const edgeEvidence = {};
+  edges.forEach(e => {
+    const s = +e.data.source.slice(1);
+    const t = +e.data.target.slice(1);
+    const key = edgeKey(s, t);
+    edgeStatus[key] = 'unknown';
+    edgeEvidence[key] = {
+      departed: new Set(),
+      returned: new Set(),
+      missing: new Set(),
+    };
+  });
+
+  Object.assign(state, {
+    n, f, k, homebase, bhNode, agents, neighbors, ports, edges,
+    edgeStatus, edgeEvidence, know, comm, delta,
+    round: 0,
+    done: false,
+    found: false,
+    bhLocated: false,
+    currentNode: homebase,
+    visitedNodes: new Set([homebase]),
+    safeNodes: new Set([homebase]),
+    traversalOrder: [],
+    traversalIndex: 0,
+    currentOperation: null,
+    activeAgentId: null,
+    identifiedByzantine: new Set(),
+    lostInBH: 0,
+    deceptionProb,
+    log: [],
+  });
+
+  state.traversalOrder = know === 'known'
+    ? buildKnownDFSPlan()
+    : buildUnknownDFSPlan();
+
+  cy2.getElementById('n' + homebase).addClass('homebase');
+  cy2.getElementById('n' + bhNode).addClass('blackhole');
+
+  q('sim2RunBtn').disabled = false;
+  q('sim2StepBtn').disabled = false;
+
+  // publish sim2 state to shared simState for UI functions
+  try { setSimState(state); } catch (e) { /* ignore */ }
+
+  addLog('Simulation initialized.', 'system');
+  addLog(`Graph built: ${n} nodes, ${edges.length} edges, Delta=${delta}`, 'system');
+  addLog(`Black Hole at node ${bhNode} (hidden from agents)`, 'system');
+  addLog(`Team: k=${k} agents, f=${f} Byzantine`, 'system');
+  addLog(`Byzantine deception rate: ${(deceptionProb * 100).toFixed(0)}% per probe`, 'system');
+  addLog(`CCP thresholds: ${f + 1} distinct return(s) => SAFE, ${f + 1} distinct non-return(s) => DANGEROUS.`, 'info');
+  addLog(`Homebase: node ${homebase}. DFS traversal plan ready.`, 'info');
+
+  updateFormula2();
   renderSim2();
+}
+
+function finishSim2(success) {
+  state.done = true;
+  state.activeAgentId = null;
+  clearInterval(state.intervalId);
+  state.intervalId = null;
+
+  cy2.edges().removeClass('probing').removeClass('release');
+  q('sim2ProgressBar').style.width = '100%';
+  q('sim2RunBtn').textContent = '▶ RUN SIMULATION';
+
+  const survivors = state.agents.filter(a => a.alive && !a.byzantine).length;
+  if (success) {
+    addLog(`BH LOCATED at node ${state.bhNode}`, 'system');
+    const modeNote = state.know === 'unknown'
+      ? `All ${state.edges.length} edges explored/classified.`
+      : 'DFS stopped after locating the black hole.';
+    addLog(`${survivors} good agent(s) survived. ${state.lostInBH} lost in BH. ${modeNote}`, 'safe');
+    showSim2Overlay('success', 'BLACK HOLE LOCATED',
+      `Node ${state.bhNode} identified in ${state.round} rounds - ${survivors} survivors`);
+  } else {
+    const unknownLeft = Object.values(state.edgeStatus).filter(v => v === 'unknown').length;
+    addLog('BHS FAILED', 'danger');
+    showSim2Overlay('failure', 'MISSION FAILED',
+      unknownLeft > 0 ? `${unknownLeft} edge(s) remained unexplored` : `All good agents eliminated by round ${state.round}`);
+  }
+
+  renderSim2();
+
+  q('sim2RunBtn').disabled = true;
+  q('sim2StepBtn').disabled = true;
 }
 
 function toggleRunSim2() {
@@ -475,15 +470,13 @@ function toggleRunSim2() {
   const interval = Number(q('sim2SpeedSel').value);
   state.intervalId = setInterval(() => {
     stepSim2();
-    if (state.phase === 'completed' && state.intervalId) {
+    if (state.done && state.intervalId) {
       clearInterval(state.intervalId);
       state.intervalId = null;
       updateRunButton();
     }
   }, interval);
   updateRunButton();
-
-  // Start running; UI will update on the next tick via renderSim2
   addLog('Simulation started.', 'info');
   renderSim2();
 }
@@ -493,7 +486,7 @@ function switchSimulation(value) {
   const sim2 = q('sim2-container');
   if (!sim1 || !sim2) return;
   if (value === 'sim2') {
-    sim1.style.display = 'none';
+    sim1.style.display = 'none'; // Potential issue: main.js uses '' to show
     sim2.style.display = 'flex';
   } else {
     sim1.style.display = '';
@@ -511,27 +504,527 @@ function updateSimulationIndicator(value) {
     : 'Active: Classical Black Hole Search';
 }
 
+function showSim2Overlay(type, title, subtitle) {
+  const overlay = q('overlay2');
+  if (!overlay) return;
+  overlay.className = `active ${type}`;
+  q('ov2Title').textContent = title;
+  q('ov2Sub').textContent = subtitle;
+}
+
+function updateSim2AgentChips() {
+  const agentList = q('sim2AgentList');
+  if (!agentList) return;
+  if (!state || !state.agents || state.agents.length === 0) {
+    agentList.innerHTML = '<div class="muted">No agents deployed.</div>';
+    return;
+  }
+  agentList.innerHTML = state.agents.map(agent => {
+    const status = agent.alive ? (agent.identified ? 'identified' : agent.status) : 'dead';
+    return `<div class="agent-chip agent-${status}" title="A${agent.id} - pos: ${agent.pos ?? 'lost'}">A${agent.id}</div>`;
+  }).join('');
+}
+
+function updateSim2EdgeTable() {
+  const edgeTable = q('sim2EdgeTable');
+  if (!edgeTable) return;
+  if (!state || !state.edges || state.edges.length === 0) {
+    edgeTable.innerHTML = '<div class="muted">No edges to display.</div>';
+    return;
+  }
+  const rows = state.edges.map(edge => {
+    const s = +edge.data.source.slice(1);
+    const t = +edge.data.target.slice(1);
+    const key = edgeKey(s, t);
+    const status = state.edgeStatus[key] || 'unknown';
+    const evidence = state.edgeEvidence[key];
+    const returned = evidence ? evidence.returned.size : 0;
+    const missing = evidence ? evidence.missing.size : 0;
+    return `<div class="edge-row"><div class="edge-id">e(${s},${t})</div><div class="edge-status edge-status-${status}">${status.toUpperCase()}</div><div class="edge-ev" title="${returned} returned, ${missing} missing"><span class="ev-ret">${returned}</span> / <span class="ev-mis">${missing}</span></div></div>`;
+  }).join('');
+  edgeTable.innerHTML = rows;
+}
+
+// --- Logic copied and adapted from simulation.js ---
+
+function edgeKey(a, b) {
+  return `${Math.min(a, b)}-${Math.max(a, b)}`;
+}
+
+function buildNeighbors(n, edges) {
+  const neighbors = {};
+  for (let i = 0; i < n; i++) neighbors[i] = [];
+  edges.forEach(e => {
+    const s = +e.data.source.slice(1);
+    const t = +e.data.target.slice(1);
+    neighbors[s].push(t);
+    neighbors[t].push(s);
+  });
+  return neighbors;
+}
+
+function graphStaysConnectedWithout(blockedNode, homebase, neighbors, n) {
+  const visited = new Set([homebase]);
+  const queue = [homebase];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const next of neighbors[cur] || []) {
+      if (next === blockedNode || visited.has(next)) continue;
+      visited.add(next);
+      queue.push(next);
+    }
+  }
+  return visited.size === n - 1;
+}
+
+function chooseBlackHole(n, homebase, neighbors, know) {
+  const candidates = [...Array(n).keys()].filter(node => node !== homebase);
+  const viable = know === 'unknown'
+    ? candidates.filter(node => graphStaysConnectedWithout(node, homebase, neighbors, n))
+    : candidates;
+  const pool = viable.length > 0 ? viable : candidates;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function requiredAgents(know, comm, f, delta) {
+  if (know === 'known') return 2 * f + 2;
+  if (comm === 'whiteboard') return (f + 1) * (delta + 1);
+  return (f + 1) * (delta + 1) + 3 * f + 1;
+}
+
+function buildKnownDFSPlan() {
+  const { homebase, ports } = state;
+  const visited = new Set([homebase]);
+  const plan = [];
+
+  const dfs = (u) => {
+    for (const v of (ports[u] || [])) {
+      if (visited.has(v)) continue;
+      visited.add(v);
+      plan.push({ kind: 'probe', from: u, to: v, classify: true, label: 'DFS probe' });
+      dfs(v);
+      plan.push({ kind: 'move', from: v, to: u, classify: false, label: 'DFS backtrack' });
+    }
+  };
+
+  dfs(homebase);
+  return plan;
+}
+
+function buildUnknownDFSPlan() {
+  const { homebase, bhNode, ports } = state;
+  const visitedNodes = new Set([homebase]);
+  const exploredEdges = new Set();
+  const plan = [];
+
+  const dfs = (u) => {
+    for (const v of (ports[u] || [])) {
+      const key = edgeKey(u, v);
+      if (exploredEdges.has(key)) continue;
+      exploredEdges.add(key);
+
+      if (v === bhNode) {
+        plan.push({ kind: 'probe', from: u, to: v, classify: true, label: 'BH boundary probe' });
+        continue;
+      }
+
+      if (!visitedNodes.has(v)) {
+        visitedNodes.add(v);
+        plan.push({ kind: 'probe', from: u, to: v, classify: true, label: 'DFS discovery' });
+        dfs(v);
+        plan.push({ kind: 'move', from: v, to: u, classify: false, label: 'DFS backtrack' });
+      } else {
+        plan.push({ kind: 'probe', from: u, to: v, classify: true, label: 'DFS cross-edge probe' });
+        plan.push({ kind: 'move', from: v, to: u, classify: false, label: 'Return after cross-edge probe' });
+      }
+    }
+  };
+
+  dfs(homebase);
+  return plan;
+}
+
+function prepareOperation(step) {
+  if (!step) {
+    return { step: { from: state.currentNode, to: state.currentNode }, actions: [{ type: 'noop' }], index: 0 };
+  }
+
+  if (step.kind === 'probe') return prepareProbeOperation(step);
+  return prepareMoveOperation(step);
+}
+
+function prepareMoveOperation(step) {
+  const key = edgeKey(step.from, step.to);
+  const actions = [];
+
+  if (state.edgeStatus[key] === 'dangerous') {
+    addLog(`Golden rule: refusing to traverse dangerous port (${step.from}->${step.to}).`, 'danger');
+    actions.push({ type: 'noop' });
+    return { step, actions, index: 0 };
+  }
+
+  const movers = state.agents.filter(a => a.alive && a.pos === step.from);
+  const shouldReleaseCluster = (state.know === 'unknown' || state.edgeStatus[key] === 'safe') && movers.length > 1;
+
+  if (shouldReleaseCluster) {
+    actions.push({ type: 'moveCluster', agentIds: movers.map(agent => agent.id), from: step.from, to: step.to });
+  } else {
+    movers.forEach(agent => actions.push({ type: 'move', agentId: agent.id, from: step.from, to: step.to }));
+  }
+
+  if (movers.length === 0) {
+    addLog(`No live agents at node ${step.from}; advancing logical DFS cursor to ${step.to}.`, 'warn');
+    actions.push({ type: 'markMoveOnly' });
+  }
+
+  return { step, actions, index: 0 };
+}
+
+function prepareProbeOperation(step) {
+  const { from, to } = step;
+  const key = edgeKey(from, to);
+
+  if (state.edgeStatus[key] === 'dangerous') {
+    addLog(`Golden rule: port (${from}->${to}) is dangerous and will not be probed again.`, 'danger');
+    return { step, actions: [{ type: 'noop' }], index: 0 };
+  }
+
+  if (state.edgeStatus[key] === 'safe') {
+    addLog(`Port (${from}->${to}) is already SAFE; moving across it.`, 'safe');
+    return prepareMoveOperation(step);
+  }
+
+  if (state.bhLocated && to === state.bhNode) {
+    markPortDangerous(from, to, `Known black-hole boundary (${from}->${to}) marked DANGEROUS without another probe.`);
+    return { step, actions: [{ type: 'noop' }], index: 0 };
+  }
+
+  const threshold = state.f + 1;
+  const candidates = agentsAvailableForProbe(from);
+  if (candidates.length < threshold) {
+    addLog(`CCP cannot start on (${from}->${to}): need ${threshold} available agents at node ${from}, found ${candidates.length}.`, 'danger');
+    return { step, actions: [{ type: 'noop' }], index: 0, failed: true };
+  }
+
+  const probe = {
+    key,
+    phase: 'initial',
+    sent: new Set(),
+    returned: new Set(),
+    missing: new Set(),
+    limit: Math.min(2 * state.f + 1, candidates.length),
+  };
+
+  const op = { step, actions: [], index: 0, probe };
+  const outcome = scheduleSoloProbe(op);
+  if (outcome === 'failed') {
+    return { step, actions: [{ type: 'noop' }], index: 0, failed: true };
+  }
+
+  addLog(`CCP starts on (${from}->${to}) with a solo probe loop; the edge will only be classified once ${threshold} distinct outcomes are observed.`, 'system');
+  return op;
+}
+
+function agentsAvailableForProbe(nodeId) {
+  return state.agents.filter(agent =>
+    agent.alive &&
+    agent.pos === nodeId &&
+    !agent.identified &&
+    !state.identifiedByzantine.has(agent.id)
+  );
+}
+
+function buildProbeActionsForAgent(agent, from, to, probe) {
+  probe.sent.add(agent.id);
+  const isBlackHolePort = to === state.bhNode;
+  const deceptive = shouldByzantineDeceive(agent);
+
+  if (isBlackHolePort) {
+    if (agent.byzantine) {
+      if (deceptive) {
+        return [
+          { type: 'move', agentId: agent.id, from, to },
+          { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
+        ];
+      }
+      return [{ type: 'lose', agentId: agent.id, from, to, probeResult: 'missing' }];
+    }
+    return [{ type: 'lose', agentId: agent.id, from, to, probeResult: 'missing' }];
+  }
+
+  if (agent.byzantine) {
+    if (deceptive) {
+      return [{ type: 'refuseReturn', agentId: agent.id, from, to, probeResult: 'missing' }];
+    }
+    return [
+      { type: 'move', agentId: agent.id, from, to },
+      { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
+    ];
+  }
+
+  return [
+    { type: 'move', agentId: agent.id, from, to },
+    { type: 'move', agentId: agent.id, from: to, to: from, probeResult: 'return' },
+  ];
+}
+
+function shouldByzantineDeceive(agent) {
+  if (!agent || !agent.byzantine) return false;
+  return Math.random() < (state.deceptionProb ?? 0.5);
+}
+
+function recordProbeEvidence(op) {
+  const evidence = state.edgeEvidence[op.probe.key];
+
+  op.actions.forEach(action => {
+    if (!action.probeResult) return;
+    op.probe.sent.add(action.agentId);
+    evidence.departed.add(action.agentId);
+
+    if (action.probeResult === 'return') {
+      op.probe.returned.add(action.agentId);
+      evidence.returned.add(action.agentId);
+    } else if (action.probeResult === 'missing') {
+      op.probe.missing.add(action.agentId);
+      evidence.missing.add(action.agentId);
+    }
+  });
+}
+
+function scheduleSafeAdvance(op) {
+  const { from, to } = op.step;
+  const movers = state.agents.filter(agent => agent.alive && agent.pos === from);
+
+  if (movers.length === 0) {
+    state.currentNode = to;
+    markCurrentNode(to);
+    return 'complete';
+  }
+
+  op.probe.phase = 'advance-safe';
+  op.actions = [{ type: 'moveCluster', agentIds: movers.map(agent => agent.id), from, to }];
+  op.index = 0;
+  addLog(`Release phase: the verified cluster crosses (${from}->${to}) together.`, 'safe');
+  return 'continue';
+}
+
+function scheduleSoloProbe(op) {
+  const { from, to } = op.step;
+
+  if (op.probe.sent.size >= op.probe.limit) {
+    addLog(`CCP exhausted ${op.probe.limit} probe agent(s) on (${from}->${to}) without reaching a threshold.`, 'danger');
+    return 'failed';
+  }
+
+  const nextAgent = agentsAvailableForProbe(from).find(agent => !op.probe.sent.has(agent.id));
+  if (!nextAgent) {
+    addLog(`CCP cannot continue on (${from}->${to}): no unused non-blacklisted agent remains at node ${from}.`, 'danger');
+    return 'failed';
+  }
+
+  op.probe.phase = 'solo';
+  op.actions = buildProbeActionsForAgent(nextAgent, from, to, op.probe);
+  op.index = 0;
+  addLog(`Solo CCP probe: A${nextAgent.id} tests (${from}->${to}) and immediately returns.`, 'system');
+  return 'continue';
+}
+
+function identifyByzantine(agentId, reason) {
+  if (state.identifiedByzantine.has(agentId)) return;
+
+  const agent = state.agents.find(a => a.id === agentId);
+  state.identifiedByzantine.add(agentId);
+  if (agent) agent.identified = true;
+  addLog(`A${agentId} identified as Byzantine: ${reason}`, 'byz');
+}
+
+function markPortDangerous(from, to, message) {
+  const key = edgeKey(from, to);
+  state.edgeStatus[key] = 'dangerous';
+  const cyEdge = getCyEdge(from, to);
+  cyEdge.addClass('dangerous').removeClass('probing');
+  cy2.getElementById(`n${to}`).removeClass('blackhole').addClass('revealed');
+  addLog(message, 'danger');
+}
+
+function moveAgent(agentId, from, to) {
+  const agent = state.agents.find(a => a.id === agentId);
+  if (!agent || !agent.alive) return;
+  agent.pos = to;
+  state.currentNode = to;
+  markCurrentNode(to);
+  addLog(`A${agent.id} moves ${from}->${to} (${agent.byzantine ? 'Byzantine' : 'good'}).`, agent.byzantine ? 'byz' : 'info');
+}
+
+function moveAgentCluster(agentIds, from, to) {
+  const agents = state.agents.filter(agent => agentIds.includes(agent.id) && agent.alive);
+  if (!agents.length) return;
+
+  agents.forEach(agent => {
+    agent.pos = to;
+  });
+  state.currentNode = to;
+  markCurrentNode(to);
+  const labels = agents.map(agent => `A${agent.id}`).join(', ');
+  addLog(`Cluster release: ${labels} move ${from}->${to} together.`, 'safe');
+}
+
+function refuseReturn(agentId, from, to) {
+  const agent = state.agents.find(a => a.id === agentId);
+  if (!agent || !agent.alive) return;
+  agent.pos = to;
+  state.currentNode = from;
+  markCurrentNode(from);
+  addLog(`A${agent.id} leaves ${from}->${to} and does not return to the group.`, 'warn');
+}
+
+function loseAgentToBlackHole(agentId, from, to) {
+  const agent = state.agents.find(a => a.id === agentId);
+  if (!agent || !agent.alive) return;
+  agent.alive = false;
+  agent.status = 'dead';
+  agent.pos = to;
+  state.lostInBH++;
+  state.currentNode = from;
+  markCurrentNode(from);
+  addLog(`A${agent.id} enters ${from}->${to} and is lost in the black hole (${state.lostInBH}/${state.f + 1}).`, 'danger');
+}
+
+function completeOperation(op) {
+  if (op.failed) return 'failed';
+
+  const { from, to, classify, label } = op.step;
+  const key = edgeKey(from, to);
+  const cyEdge = getCyEdge(from, to);
+
+  if (op.step.kind === 'move') {
+    state.currentNode = to;
+    markCurrentNode(to);
+    cyEdge.removeClass('probing');
+    return 'complete';
+  }
+
+  if (!op.probe) {
+    cyEdge.removeClass('probing');
+    return op.failed ? 'failed' : 'complete';
+  }
+
+  if (op.probe.phase === 'advance-safe') {
+    state.currentNode = to;
+    markCurrentNode(to);
+    cyEdge.removeClass('probing');
+    return 'complete';
+  }
+
+  recordProbeEvidence(op);
+
+  const returned = op.probe.returned.size;
+  const missing = op.probe.missing.size;
+  const threshold = state.f + 1;
+
+  addLog(`CCP evidence on (${from}->${to}): ${returned}/${threshold} returned, ${missing}/${threshold} did not return.`, 'system');
+
+  if (returned >= threshold) {
+    if (classify && state.edgeStatus[key] === 'unknown') {
+      state.edgeStatus[key] = 'safe';
+      state.safeNodes.add(from);
+      state.safeNodes.add(to);
+      state.visitedNodes.add(to);
+      cyEdge.addClass('safe');
+      cy2.getElementById(`n${to}`).addClass('safe');
+      cy2.getElementById(`n${from}`).addClass('safe');
+      addLog(`${label}: port (${from}->${to}) certified SAFE after ${returned} distinct return(s).`, 'safe');
+    }
+
+    op.probe.missing.forEach(agentId => {
+      identifyByzantine(agentId, `it failed to return from (${from}->${to}), which was later certified SAFE.`);
+    });
+
+    return scheduleSafeAdvance(op);
+  }
+
+  if (missing >= threshold) {
+    state.found = true;
+    state.bhLocated = true;
+    state.currentNode = from;
+    markPortDangerous(from, to, `CCP on port (${from}->${to}) certified DANGEROUS after ${missing} distinct non-return(s).`);
+
+    op.probe.returned.forEach(agentId => {
+      identifyByzantine(agentId, `it returned from (${from}->${to}) after that port was certified DANGEROUS.`);
+    });
+
+    return 'complete';
+  }
+
+  return scheduleSoloProbe(op);
+}
+
+function shouldFinish() {
+  if (state.currentOperation) return false;
+  if (state.know === 'unknown') return allEdgesClassified() || state.traversalIndex >= state.traversalOrder.length;
+  return state.traversalIndex >= state.traversalOrder.length || state.bhLocated;
+}
+
+function finishWasSuccessful() {
+  if (state.know === 'unknown') return state.bhLocated && allEdgesClassified();
+  return state.bhLocated;
+}
+
+function allEdgesClassified() {
+  return Object.values(state.edgeStatus).every(status => status !== 'unknown');
+}
+
+function progressPercent() {
+  if (state.know === 'unknown') {
+    const classified = Object.values(state.edgeStatus).filter(status => status !== 'unknown').length;
+    return Math.min(100, classified / state.edges.length * 100);
+  }
+
+  if (state.traversalOrder.length === 0) return 100;
+  const opFraction = state.currentOperation
+    ? state.currentOperation.index / state.currentOperation.actions.length
+    : 0;
+  return Math.min(100, (state.traversalIndex + opFraction) / state.traversalOrder.length * 100);
+}
+
+// --- End of copied logic ---
+
 function installEventHandlers() {
   q('sim2BuildBtn').addEventListener('click', buildSim2);
   q('sim2ResetBtn').addEventListener('click', resetSim2);
   q('sim2RunBtn').addEventListener('click', toggleRunSim2);
   q('sim2StepBtn').addEventListener('click', stepSim2);
+
   q('sim2SpeedSel').addEventListener('change', () => {
     if (state.intervalId) {
       clearInterval(state.intervalId);
       state.intervalId = setInterval(stepSim2, Number(q('sim2SpeedSel').value));
     }
   });
-  q('sim2PathSize').addEventListener('input', () => {
-    q('sim2PathSizeVal').textContent = q('sim2PathSize').value;
+
+  q('sim2nNodes').addEventListener('input', () => { q('sim2nVal').textContent = q('sim2nNodes').value; updateFormula2(); });
+  q('sim2fFault').addEventListener('input', () => { q('sim2fVal').textContent = q('sim2fFault').value; updateFormula2(); });
+  q('sim2ByzDeception').addEventListener('input', () => { q('sim2ByzDeceptionVal').textContent = `${q('sim2ByzDeception').value}%`; });
+  q('sim2TopoKnow').addEventListener('change', updateFormula2);
+  q('sim2CommModel').addEventListener('change', updateFormula2);
+
+  q('sim2nNodes').addEventListener('change', buildSim2);
+  q('sim2fFault').addEventListener('change', buildSim2);
+  q('sim2TopoSelect').addEventListener('change', buildSim2);
+  q('sim2TopoKnow').addEventListener('change', buildSim2);
+  q('sim2CommModel').addEventListener('change', buildSim2);
+
+  q('overlay2CloseBtn').addEventListener('click', () => q('overlay2').className = '');
+  document.querySelectorAll('#sim2Status .tab').forEach(tab => {
+    tab.addEventListener('click', () => switchSim2Tab(tab.dataset.tab));
   });
-  q('sim2PathSize').addEventListener('change', buildSim2);
-  if (q('sim2TopoSelect')) {
-    q('sim2TopoSelect').addEventListener('change', () => {
-      addLog(`Topology set to ${q('sim2TopoSelect').value}.`, 'info');
-    });
-  }
-  q('sim2AdversaryMode').addEventListener('change', () => addLog(`Adversary mode set to ${q('sim2AdversaryMode').value}.`, 'info'));
+}
+
+function switchSim2Tab(tabName) {
+  document.querySelectorAll('#sim2Status .tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('#sim2Status .tab').forEach(el => el.classList.remove('active'));
+  q(`sim2-tab-${tabName}`).classList.add('active');
+  document.querySelector(`#sim2Status .tab[data-tab="${tabName}"]`).classList.add('active');
 }
 
 window.switchSimulation = switchSimulation;
