@@ -6,7 +6,7 @@
 
 import { cyRef, runRef, simState, setSimState } from './state.js';
 import { generateGraph } from './graph-generation.js';
-import { initCy } from './cytoscape-setup.js';
+import { initCy, scheduleCyReflow } from './cytoscape-setup.js';
 import {
   $, setStat, logAdd, logClear, updateAgentChips,
   updateEdgeTable, showOverlay, updateFormula,
@@ -27,6 +27,7 @@ export function buildGraph() {
   const { nodes, edges } = generateGraph(topo, n);
   initCy(nodes, edges);
   const cy = cyRef.instance;
+  scheduleCyReflow(cy, renderAgentsOnGraph);
   cy.on('pan zoom resize layoutstop', renderAgentsOnGraph);
   cy.on('position', 'node', renderAgentsOnGraph);
 
@@ -402,7 +403,8 @@ function buildProbeActionsForAgent(s, agent, from, to, probe) {
 
 function shouldByzantineDeceive(s, agent) {
   if (!agent || !agent.byzantine) return false;
-  return Math.random() < (s.deceptionProb ?? 0.5);
+  const p = s.deceptionProb ?? 0.5;
+  return p >= 1 || Math.random() < p;
 }
 
 function recordProbeEvidence(op) {
@@ -603,7 +605,10 @@ function completeOperation(op) {
 
 function shouldFinish(s) {
   if (s.currentOperation) return false;
-  if (s.know === 'unknown') return allEdgesClassified(s) || s.traversalIndex >= s.traversalOrder.length;
+  if (s.know === 'unknown') {
+    const traversalExhausted = s.traversalIndex >= s.traversalOrder.length;
+    return traversalExhausted || allEdgesClassified(s);
+  }
   return s.traversalIndex >= s.traversalOrder.length || s.bhLocated;
 }
 

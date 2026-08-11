@@ -107,6 +107,20 @@ export function initCy(nodes, edges) {
 
   cyRef.instance.on('mouseover', 'node', showTooltip);
   cyRef.instance.on('mouseout',  'node', () => { document.getElementById('tooltip').style.display = 'none'; });
+  scheduleCyReflow(cyRef.instance);
+}
+
+export function scheduleCyReflow(cy, after = null) {
+  if (!cy) return;
+  const run = () => {
+    cy.resize();
+    cy.fit();
+    if (after) after();
+  };
+  requestAnimationFrame(() => {
+    run();
+    setTimeout(run, 60);
+  });
 }
 
 function showTooltip(evt) {

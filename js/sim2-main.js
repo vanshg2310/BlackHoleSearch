@@ -1,5 +1,5 @@
 import { generateGraph } from './graph-generation.js';
-import { STYLE } from './cytoscape-setup.js';
+import { STYLE, scheduleCyReflow } from './cytoscape-setup.js';
 import { renderAgentsLayer, getCyEdge as getCyEdgeShared, highlightEdge as highlightEdgeShared, markCurrentNode as markCurrentNodeShared } from './sim-shared.js';
 import { cyRef, setSimState } from './state.js';
 import { setStat, logAdd, logClear, updateAgentChips, updateEdgeTable } from './ui.js';
@@ -36,6 +36,7 @@ function initCy2(nodes, edges) {
   cy2.on('mouseout', 'node', () => { q('tooltip2').style.display = 'none'; });
   cy2.on('pan zoom resize layoutstop', () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId));
   cy2.on('position', 'node', () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId));
+  scheduleCyReflow(cy2, () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId));
 }
 
 function showTooltip2(evt) {
@@ -737,7 +738,7 @@ function buildProbeActionsForAgent(agent, from, to, probe) {
   const isBlackHolePort = to === state.bhNode;
 
   if (isBlackHolePort) {
-    const bhDeceives = Math.random() < state.bhDeceptionProb;
+    const bhDeceives = state.bhDeceptionProb >= 1 || Math.random() < state.bhDeceptionProb;
     if (bhDeceives) {
       addLog(`Byzantine BH at ${to} deceives, A${agent.id} returns.`, 'byz');
       return [
@@ -918,7 +919,10 @@ function completeOperation(op) {
 
 function shouldFinish() {
   if (state.currentOperation) return false;
-  if (state.know === 'unknown') return allEdgesClassified() || state.traversalIndex >= state.traversalOrder.length;
+  if (state.know === 'unknown') {
+    const traversalExhausted = state.traversalIndex >= state.traversalOrder.length;
+    return traversalExhausted || allEdgesClassified();
+  }
   return state.traversalIndex >= state.traversalOrder.length || state.bhLocated;
 }
 
@@ -988,7 +992,14 @@ window.switchSimulation = switchSimulation;
 
 (function initializeSim2() {
   if (!q('cy2')) return;
+  if (window.__bhsSim2Initialized) return;
+  window.__bhsSim2Initialized = true;
   installEventHandlers();
   buildSim2();
+  requestAnimationFrame(() => {
+    if (cy2) {
+      scheduleCyReflow(cy2, () => renderAgentsLayer(cy2, q('agentLayer2'), state.agents, state.activeAgentId));
+    }
+  });
   updateSimulationIndicator(q('sim2Select').value || 'sim1');
 }());

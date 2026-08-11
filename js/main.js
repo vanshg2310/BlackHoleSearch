@@ -2,6 +2,7 @@
 
 import { cyRef, runRef } from './state.js';
 import { buildGraph, stepSimulation, resetSimulation, renderAgentsOnGraph } from './simulation.js';
+import { scheduleCyReflow } from './cytoscape-setup.js';
 import { $, updateFormula, closeOverlay, switchTab } from './ui.js';
 
 const nNodes  = $('nNodes');
@@ -59,6 +60,22 @@ if (panelToggle) {
 }
 window.addEventListener('resize', refreshGraphViewport);
 
+function initializeMainSimulation() {
+  if (window.__bhsMainInitialized) return;
+  window.__bhsMainInitialized = true;
+  buildGraph();
+  window.requestAnimationFrame(() => {
+    if (cyRef.instance) {
+      scheduleCyReflow(cyRef.instance, renderAgentsOnGraph);
+    }
+  });
+}
+
+window.addEventListener('load', initializeMainSimulation, { once: true });
+if (document.readyState === 'complete') {
+  initializeMainSimulation();
+}
+
 nNodes.oninput = () => { $('nVal').textContent = nNodes.value; updateFormula(); };
 fFault.oninput = () => { $('fVal').textContent = fFault.value; updateFormula(); };
 $('byzDeception').oninput = () => { $('byzDeceptionVal').textContent = `${$('byzDeception').value}%`; };
@@ -87,4 +104,3 @@ document.querySelectorAll('.tab').forEach(tab => {
 });
 
 updateFormula();
-buildGraph();
